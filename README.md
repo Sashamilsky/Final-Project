@@ -1,2 +1,1 @@
-#My Project
-Rainbow Smelt Populations 
+# My Project

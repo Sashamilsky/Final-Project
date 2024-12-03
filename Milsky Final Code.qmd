@@ -1,0 +1,378 @@
+---
+title: "Rainbow Smelt Populations in Great Bay NH"
+format: pdf
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Loading Data
+
+totals \<- read.csv("Total_Fish.csv")
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(lubridate)
+
+ages <- read.csv("Age_Data.csv")
+environment <- read.csv("Environmental_Data.csv")
+totals <- read.csv("Total_Fish.csv")
+```
+
+## Joining Data Sets
+
+```{r}
+dat <- ages %>% 
+  left_join(environment, by=join_by(Date, RiverName))
+
+total_environ <- totals %>% 
+  left_join(environment, by=c("HaulDate"="Date","RiverID"="RiverName"))
+```
+
+## Relative Abundances
+
+```{r}
+#fixing dates for "totals"
+totals <- totals %>% 
+  drop_na()
+
+# Convert to Date format
+totals$HaulDate <- as.Date(totals$HaulDate, format = "%m/%d/%Y")
+
+# Format the date as "MM/DD/YYYY"
+totals$formatted_date <- format(totals$HaulDate, "%m/%d/%Y")
+
+# Extract month, day, and year
+totals$month <- month(totals$HaulDate)
+totals$day <- day(totals$HaulDate)
+totals$year <- year(totals$HaulDate)
+
+
+```
+
+```{r}
+#catch totals by year and river of all handled fish
+abundance <- totals %>% 
+  dplyr::select(year, RiverID) %>% 
+  group_by(year, RiverID) %>% 
+  summarise(Catch= n())
+#plotting abundance in a stacked bar graph 
+ggplot(abundance, aes(x=year, y=Catch, fill=RiverID))+
+  geom_bar(stat="Identity")+
+  theme_light()+
+  labs(x="Year", y="Total Catch")
+
+summary(abundance)
+
+sum_abundance <- totals %>% 
+  group_by(year) %>% 
+  summarise(Total_Catch= n())
+
+sum_abundance2 <- totals %>% 
+  group_by(RiverID) %>% 
+  summarise(Total_Catch= n())
+
+date_year <-  total_environ %>% 
+  group_by(Year) %>% 
+  summarise(n_date=n_distinct(HaulDate))
+
+year_temp <- total_environ %>% 
+  group_by(Year) %>% 
+  summarise(mean_temp=mean(Temperature))
+  
+```
+
+```{r}
+#Fixing Dates for "dat"
+# Convert to Date format
+dat$Date <- as.Date(dat$Date, format = "%m/%d/%Y")
+
+# Format the date as "MM/DD/YYYY"
+dat$formatted_date <- format(dat$Date, "%m/%d/%Y")
+
+# Extract month, day, and year
+dat$month <- month(dat$Date)
+dat$day <- day(dat$Date)
+dat$year <- year(dat$Date)
+
+```
+
+```{r}
+#Aged fish abundances 
+age_abundance <- dat %>% 
+  dplyr::select(year, Age) %>% 
+  group_by(year, Age) %>% 
+  summarise(Catch=n()) %>% 
+  group_by(year) %>% 
+  mutate(Proportion = Catch / sum(Catch)) %>%
+  ungroup()
+
+age_abundance$Age <- as.factor(age_abundance$Age)
+age_abundance$Age <- factor(age_abundance$Age, levels = c(6,5,4,3,2,1))
+ggplot(age_abundance, aes(x=year, y=Proportion, fill=Age))+
+  geom_bar(stat = "identity")+
+  theme_light()+
+  labs(x= "Year", y="Proportion of Catch")+
+  scale_fill_brewer(palette = "Dark2")
+```
+
+```{r}
+hist(dat$Age)
+hist(age_abundance$Proportion)
+#This shows a poisson distribution? 
+
+#Running a chi squared test to determine differences in the proportions of age classes between years 
+age_prop <- dat %>% 
+  dplyr::select(SampleYear, Age) %>% 
+  group_by(SampleYear, Age) %>% 
+  summarise(Catch=n()) 
+
+age_prop <- age_prop %>%
+  pivot_wider(names_from = Age, values_from = Catch) %>% 
+   mutate_if(is.numeric, ~replace(., is.na(.), 0)) %>% 
+  adorn_totals(where= c("col", "row"))
+
+chisq_result <- chisq.test(age_prop, simulate.p.value = TRUE)
+print(chisq_result)
+  
+```
+
+```{r}
+library(lubridate) 
+dat$calendar_day <- yday(dat$Date)
+
+#Graphing calendar_day by average age 
+calendar <- dat %>% 
+  dplyr::select(calendar_day, Age) %>% 
+  group_by(calendar_day) %>% 
+  summarise(mean_age= mean(Age))
+
+ggplot(calendar, aes(x=calendar_day, y=mean_age))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  ylab("Average Age")+
+  xlab("Calendar Day")+
+  theme_light()
+
+mod <- lm(calendar_day ~ mean_age, data=calendar)
+summary(mod)
+
+```
+
+## Temperature Data
+
+```{r}
+#Graphing water temperature for the three rivers 
+total_environ <- total_environ %>% 
+  drop_na()
+
+daily <- total_environ %>% 
+  dplyr::select(HaulDate, RiverID, Temperature, Year) %>% 
+  group_by(HaulDate, RiverID, Year) %>% 
+  summarise(Catch= n(), Temperature= mean(Temperature))
+
+range(daily$Temperature)
+mean(daily$Temperature)
+
+ggplot(daily, aes(x=RiverID, y=Temperature, fill= RiverID))+
+  geom_boxplot()+
+  ylab("Temperature (\u00b0c)")+
+  theme_light()
+
+ggplot(daily, aes(x=Year, y=Temperature, group=Year, fill= Year))+
+  geom_boxplot()+
+  scale_fill_viridis()+
+  ylab("Temperature (\u00b0c)")+
+  theme_light()
+
+```
+
+```{r}
+#Testing for differences in water temperature between the three rivers 
+library(tidyverse)
+library(gt)
+library(DAAG)
+library(lme4)
+
+
+#data follow normal distribution
+hist(daily$Temperature)
+qqPlot(daily$Temperature)
+shapiro.test(daily$Temperature)#although p value was just higher than 0.05, I am moving on with normal distribution 
+
+#Test for equal variance 
+leveneTest(daily$Temperature ~ daily$RiverID) #barely shows heteroscedasticity 
+leveneTest(daily$Temperature ~ as.factor(daily$Year)) #shows homoscedasticity 
+
+#ANOVA
+one.way_River <- aov(Temperature ~ RiverID, data = daily)
+summary(one.way_River) #There is no statistically significant difference between rivers 
+
+#average temp in all three rivers 1.74
+daily_temp <- daily %>% 
+  group_by(RiverID) %>% 
+  summarise(Average_Temp= mean(Temperature))
+
+one.way_Year <- aov(Temperature ~ Year, data = daily)
+summary(one.way_Year) #There is no statistically significant difference between years
+
+```
+
+```{r}
+#Observing mean catch for each river across the temperatures recorded during the survey
+catch_temp <- daily %>% 
+  group_by(Temperature, RiverID, HaulDate, Year) %>% 
+  summarise(mean_catch = mean(Catch))
+
+ggplot(catch_temp, aes(x=Temperature, y=mean_catch, color=RiverID))+
+  geom_point()+
+  geom_rect(aes(xmin = 1.74, xmax = 4.55, ymin = -Inf, ymax = Inf), 
+            fill = "blue", color="black", alpha = 0.005) +
+  theme_light()+
+  labs(y= "Average Catch")+
+  facet_wrap(~RiverID, scales = "free_y")
+
+ggplot(catch_temp, aes(x=Temperature, y=mean_catch, color=RiverID))+
+  geom_point()+
+  geom_rect(aes(xmin = 1.69, xmax = 6.42, ymin = -Inf, ymax = Inf), 
+            fill = "blue", color ="black", alpha = 0.005) +
+  theme_light()+
+  labs(y= "Average Catch")+
+  facet_wrap(~Year, scales = "free_y")
+
+```
+
+```{r}
+peak_temp_river <- catch_temp %>%
+  group_by(RiverID) %>%
+  filter(mean_catch == max(mean_catch)) %>%
+  summarise(peak_temp = Temperature)
+
+peak_temp_year<- catch_temp %>%
+  group_by(Year) %>%
+  filter(mean_catch == max(mean_catch)) %>%
+  summarise(peak_temp = Temperature)
+
+peak_temp <- catch_temp %>%
+  group_by(RiverID, Year) %>%
+  filter(mean_catch == max(mean_catch)) %>%
+  summarise(peak_temp = Temperature)
+
+hist(peak_temp$peak_temp)
+
+anova_temp <- aov(peak_temp ~ RiverID, data= peak_temp)
+summary(anova_temp)
+
+anova_year <- aov(peak_temp ~ Year, data= peak_temp)
+summary(anova_year)
+
+anova_interaction <- aov(peak_temp ~ Year * RiverID, data= peak_temp)
+summary(anova_interaction)
+
+AIC(anova_temp, anova_year, anova_interaction)
+```
+
+## Size Data
+
+```{r}
+#Correlation between age and length 
+ggplot(ages, aes(x=Age, y=Length))+
+  geom_point()
+```
+
+```{r}
+#plotting length data by river 
+ggplot(ages, aes(x=RiverName, y=Length, fill= RiverName))+
+  geom_violin()+
+  stat_summary(fun = mean, geom = "crossbar", width = 0.5, color= "black")+
+  ylab("Length (mm)")
+  theme_light()
+  
+#Exploring length by temp 
+ggplot(dat, aes(x=Temperature, y=Length))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+mod2 <- lm(Length ~ Temperature, data=dat)
+summary(mod2)
+
+mod3 <- lm(Length ~ Temperature + Age, data=dat)
+summary(mod3)
+
+AIC(mod2, mod3)
+
+temp_avg <- dat %>% 
+  dplyr::select(Temperature, Length) %>% 
+  group_by(Temperature) %>% 
+  summarise(mean_length= mean(Length))
+
+ggplot(temp_avg, aes(x=Temperature, y=mean_length))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+mod4 <- lm(mean_length ~ Temperature, data=temp_avg)
+summary(mod4)
+
+#Exploting length and calendar day
+length_avg <- dat %>% 
+  dplyr::select(calendar_day, Length) %>% 
+  group_by(calendar_day) %>% 
+  summarise(mean_length= mean(Length))
+
+ggplot(length_avg, aes(x=calendar_day, y=mean_length))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  theme_light()+
+  ylab("Mean Length")+
+  xlab("Day of the Year")
+
+ggplot(dat, aes(x=calendar_day, y=Length))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  theme_light()+
+  ylab("Mean Length")+
+  xlab("Day of the Year")
+
+mod5 <- lm(mean_length ~ calendar_day, data=length_avg)
+summary(mod5)
+
+AIC(mod2, mod3, mod4, mod5)
+
+```
+
+```{r}
+#To examine if there are differences in the lengths of fish between rivers 
+#Testing for differences in water temperature between the three rivers 
+library(tidyverse)
+library(gt)
+library(DAAG)
+library(car)
+library(multcomp)
+library(dunn.test)
+
+hist(ages$Length)
+qqPlot(ages$Length)
+
+#data do not follow normal distribution
+shapiro.test(ages$Length)
+
+#data do not show equal variance
+leveneTest(ages$Length ~ ages$RiverName)
+
+#not normal distribution and unequal variances so I will use the Kruskal Wallis Test
+kruskal_length <- kruskal.test(Length ~ RiverName, data = ages)
+print(kruskal_length)
+
+#which ones are different from each other? 
+
+```
+
+```{r}
+#Temp by body length 
+
+ggplot(total_environ, aes(x=Temperature, y=Length..mm.))+
+  geom_point()+
+  geom_smooth(method="lm")
+```
+

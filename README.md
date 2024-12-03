@@ -1,3 +1,2 @@
 # My Project
-Rainbow Smelt Populations
-Great Bay NH
+Examining Environmental and Morphological Impacts on Rainbow Smelt Spawning Behavior in Great Bay, NH
